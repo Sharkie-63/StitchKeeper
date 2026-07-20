@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Rowkeeper</title>
+<style>
+  :root {
+    --wool: #E8DFD0;
+    --wool-deep: #D8CBB4;
+    --ink: #2B2620;
+    --thread: #B0472E;   /* madder red */
+    --thread-dim: #8A3A26;
+    --sage: #6E7B5A;      /* muted needle-green */
+    --paper: #F5F0E6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%;
+    background: var(--ink);
+    color: var(--paper);
+    font-family: ui-rounded, "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+  /* ---- Camera stage ---- */
+  #stage { position: relative; flex: 1; min-height: 0; background: #000; overflow: hidden; }
+  video, canvas {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; transform: scaleX(-1);
+  }
+  #overlay { pointer-events: none; }
+
+  /* status pill */
+  #status {
+    position: absolute;
+    top: max(14px, env(safe-area-inset-top));
+    left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 16px 9px 13px;
+    background: rgba(43,38,32,0.72);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-radius: 100px;
+    font-size: 14px; font-weight: 600; letter-spacing: 0.2px;
+    white-space: nowrap; z-index: 5; transition: background .3s;
+  }
+  #dot { width: 11px; height: 11px; border-radius: 50%; background: #6b6157; flex: none; transition: background .3s, box-shadow .3s; }
+  #status.active #dot { background: var(--sage); box-shadow: 0 0 0 0 rgba(110,123,90,.6); animation: pulse 1.6s infinite; }
+  #status.paused #dot { background: var(--thread); }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(110,123,90,.55); }
+    70% { box-shadow: 0 0 0 9px rgba(110,123,90,0); }
+    100% { box-shadow: 0 0 0 0 rgba(110,123,90,0); }
+  }
+
+  /* ---- Bottom panel ---- */
+  #panel {
+    flex: none; background: var(--paper); color: var(--ink);
+    border-radius: 26px 26px 0 0; margin-top: -26px;
+    padding: 18px 22px calc(20px + env(safe-area-inset-bottom));
+    box-shadow: 0 -8px 30px rgba(0,0,0,.35); z-index: 6;
+  }
+
+  /* project selector row */
+  #projectBar {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--wool); border: 1px solid var(--wool-deep);
+    border-radius: 14px; padding: 11px 12px 11px 14px;
+    margin-bottom: 16px; cursor: pointer; width: 100%; text-align: left;
+  }
+  #projectBar .swatch { width: 12px; height: 12px; border-radius: 50%; flex: none; background: var(--thread); }
+  #projectBar .pinfo { flex: 1; min-width: 0; }
+  #projectBar .plabel { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #8a7f6e; }
+  #projectBar .pname { font-size: 16px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #projectBar .chev { color: var(--thread); font-size: 13px; font-weight: 700; flex: none; }
+
+  .eyebrow {
+    font-size: 11px; font-weight: 700; letter-spacing: 2.5px; text-transform: uppercase;
+    color: var(--thread); display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+  }
+  .eyebrow > .lbl { flex: none; }
+  .eyebrow > .rule { flex: 1; height: 1px; background: repeating-linear-gradient(90deg, var(--wool-deep) 0 4px, transparent 4px 8px); }
+  #clock { font-size: 58px; font-weight: 800; line-height: 1; letter-spacing: -2px; font-variant-numeric: tabular-nums; margin: 7px 0 2px; }
+  #clock .cs { font-size: 28px; color: var(--thread-dim); font-weight: 700; }
+  #sub { font-size: 13px; color: #7a7062; font-weight: 500; min-height: 18px; margin-bottom: 16px; }
+  #controls { display: flex; gap: 11px; }
+  button {
+    font-family: inherit; border: none; border-radius: 15px;
+    font-size: 16px; font-weight: 700; padding: 16px; cursor: pointer;
+    transition: transform .12s, opacity .2s, background .2s; flex: 1;
+  }
+  button:active { transform: scale(.96); }
+  button:disabled { opacity: .4; }
+  #startBtn { background: var(--thread); color: var(--paper); flex: 2; }
+  #resetBtn { background: var(--wool-deep); color: var(--ink); }
+
+  /* ---- Projects drawer ---- */
+  #scrim {
+    position: absolute; inset: 0; z-index: 30;
+    background: rgba(20,16,12,0.55); backdrop-filter: blur(3px);
+    opacity: 0; pointer-events: none; transition: opacity .28s;
+  }
+  #scrim.open { opacity: 1; pointer-events: auto; }
+  #drawer {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 31;
+    background: var(--paper); color: var(--ink);
+    border-radius: 26px 26px 0 0;
+    padding: 10px 20px calc(20px + env(safe-area-inset-bottom));
+    max-height: 82%; display: flex; flex-direction: column;
+    transform: translateY(100%); transition: transform .32s cubic-bezier(.22,1,.36,1);
+    box-shadow: 0 -10px 40px rgba(0,0,0,.4);
+  }
+  #drawer.open { transform: translateY(0); }
+  .grabber { width: 40px; height: 5px; border-radius: 3px; background: var(--wool-deep); margin: 4px auto 14px; flex: none; }
+  #drawer h2 { font-size: 19px; font-weight: 800; letter-spacing: -.3px; margin-bottom: 2px; }
+  #drawer .sub2 { font-size: 13px; color: #8a7f6e; margin-bottom: 14px; }
+  #projList { overflow-y: auto; -webkit-overflow-scrolling: touch; flex: 1; margin: 0 -6px; padding: 0 6px; }
+  .prow {
+    display: flex; align-items: center; gap: 12px;
+    padding: 13px 12px; border-radius: 14px; margin-bottom: 8px;
+    background: var(--wool); border: 1px solid transparent; cursor: pointer;
+  }
+  .prow.sel { border-color: var(--thread); background: #efe6d6; }
+  .prow .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+  .prow .meta { flex: 1; min-width: 0; }
+  .prow .nm { font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prow .tm { font-size: 12.5px; color: #8a7f6e; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .prow .tick { color: var(--thread); font-weight: 800; font-size: 16px; flex: none; opacity: 0; }
+  .prow.sel .tick { opacity: 1; }
+  .prow .del {
+    flex: none; width: 34px; height: 34px; padding: 0; border-radius: 9px;
+    background: transparent; color: #b7ab98; font-size: 18px; font-weight: 700;
+  }
+  .prow .del:active { background: rgba(176,71,46,.12); color: var(--thread); }
+  #addRow { display: flex; gap: 9px; margin-top: 12px; flex: none; }
+  #newName {
+    flex: 1; font-family: inherit; font-size: 16px; font-weight: 600;
+    padding: 14px 15px; border-radius: 13px; border: 1px solid var(--wool-deep);
+    background: #fff; color: var(--ink); outline: none;
+  }
+  #newName:focus { border-color: var(--thread); }
+  #addBtn { flex: none; background: var(--thread); color: var(--paper); padding: 14px 20px; }
+
+  /* history button on the eyebrow */
+  .eyebrow #histBtn {
+    flex: none; width: auto; margin-left: 0; padding: 4px 10px;
+    font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: none;
+    background: var(--wool); color: var(--thread); border-radius: 100px;
+  }
+
+  /* history sheet (reuses drawer look) */
+  #histScrim {
+    position: absolute; inset: 0; z-index: 32;
+    background: rgba(20,16,12,0.55); backdrop-filter: blur(3px);
+    opacity: 0; pointer-events: none; transition: opacity .28s;
+  }
+  #histScrim.open { opacity: 1; pointer-events: auto; }
+  #histSheet {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 33;
+    background: var(--paper); color: var(--ink);
+    border-radius: 26px 26px 0 0;
+    padding: 10px 20px calc(20px + env(safe-area-inset-bottom));
+    max-height: 82%; display: flex; flex-direction: column;
+    transform: translateY(100%); transition: transform .32s cubic-bezier(.22,1,.36,1);
+    box-shadow: 0 -10px 40px rgba(0,0,0,.4);
+  }
+  #histSheet.open { transform: translateY(0); }
+  #histHead { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  #histHead .sw { width: 16px; height: 16px; border-radius: 50%; flex: none; }
+  #histHead h2 { font-size: 19px; font-weight: 800; letter-spacing: -.3px; }
+  #histBody { overflow-y: auto; -webkit-overflow-scrolling: touch; flex: 1; margin: 0 -4px; padding: 0 4px 4px; }
+  .hgroup { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #a89a85; margin: 14px 4px 8px; }
+  .hgroup:first-child { margin-top: 2px; }
+  .hrow { display: flex; align-items: center; gap: 12px; padding: 11px 4px; border-bottom: 1px solid #eae2d3; }
+  .hrow .hday { flex: 1; }
+  .hrow .hd1 { font-size: 15px; font-weight: 700; }
+  .hrow .hd2 { font-size: 12px; color: #9a8d78; }
+  .hbar { height: 8px; border-radius: 4px; min-width: 4px; opacity: .9; }
+  .hrow .hval { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; width: 62px; text-align: right; }
+  .hsum { display: flex; justify-content: space-between; align-items: baseline; background: var(--wool); border-radius: 14px; padding: 13px 15px; margin-bottom: 4px; }
+  .hsum .l { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #8a7f6e; }
+  .hsum .v { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .hempty { text-align: center; color: #9a8d78; font-size: 14px; padding: 40px 20px; line-height: 1.5; }
+
+  /* start screen */
+  #splash {
+    position: absolute; inset: 0; z-index: 20;
+    background: linear-gradient(160deg, #322c24, #1c1813);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 32px;
+  }
+  #splash h1 { font-size: 40px; font-weight: 800; letter-spacing: -1px; margin-bottom: 6px; }
+  #splash h1 .accent { color: var(--thread); }
+  #splash p { color: var(--wool-deep); font-size: 15px; line-height: 1.5; max-width: 300px; margin-bottom: 30px; }
+  #splash .knot { font-size: 15px; letter-spacing: 3px; color: var(--thread); font-weight: 700; text-transform: uppercase; margin-bottom: 22px; }
+  #beginBtn { flex: none; background: var(--thread); color: var(--paper); padding: 17px 44px; font-size: 17px; border-radius: 100px; }
+  #err { color: #e8a08c; font-size: 13px; margin-top: 18px; max-width: 300px; line-height: 1.4; min-height: 16px; }
+  #hint { position:absolute; bottom: calc(22px + env(safe-area-inset-bottom)); left:0; right:0; color: #6b6157; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div id="status"><span id="dot"></span><span id="statusText">Looking for hands…</span></div>
+
+    <div id="splash">
+      <div class="knot">◦ ◦ ◦ ◦ ◦</div>
+      <h1>Row<span class="accent">keeper</span></h1>
+      <p>Point the camera at your hands. The clock runs while you stitch and quietly pauses when your hands rest.</p>
+      <button id="beginBtn">Start the camera</button>
+      <div id="err"></div>
+      <div id="hint">Works best in good light · nothing leaves your phone</div>
+    </div>
+
+    <!-- Projects drawer -->
+    <div id="scrim"></div>
+    <div id="drawer">
+      <div class="grabber"></div>
+      <h2>Projects</h2>
+      <div class="sub2">Time banks to the project you pick here.</div>
+      <div id="projList"></div>
+      <div id="addRow">
+        <input id="newName" type="text" placeholder="New project name" maxlength="40" enterkeyhint="done" autocomplete="off">
+        <button id="addBtn">Add</button>
+      </div>
+    </div>
+
+    <!-- History sheet -->
+    <div id="histScrim"></div>
+    <div id="histSheet">
+      <div class="grabber"></div>
+      <div id="histHead">
+        <span class="sw" id="histSwatch"></span>
+        <div>
+          <h2 id="histTitle">History</h2>
+          <div class="sub2" id="histSub">Time per day</div>
+        </div>
+      </div>
+      <div id="histBody"></div>
+    </div>
+  </div>
+
+  <div id="panel">
+    <button id="projectBar" type="button">
+      <span class="swatch" id="barSwatch"></span>
+      <span class="pinfo">
+        <span class="plabel">Current project</span>
+        <span class="pname" id="barName">—</span>
+      </span>
+      <span class="chev">Switch ▸</span>
+    </button>
+
+    <div class="eyebrow"><span class="lbl">This session</span><span class="rule"></span><button id="histBtn" type="button">History ▸</button></div>
+    <div id="clock"><span id="hms">00:00</span><span class="cs" id="cs">.0</span></div>
+    <div id="sub">Ready when you are.</div>
+    <div id="controls">
+      <button id="startBtn" disabled>Pause</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, HandLandmarker }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+/* ---------------- elements ---------------- */
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const octx = overlay.getContext('2d');
+const statusEl = document.getElementById('status');
+const statusText = document.getElementById('statusText');
+const hmsEl = document.getElementById('hms');
+const csEl = document.getElementById('cs');
+const subEl = document.getElementById('sub');
+const startBtn = document.getElementById('startBtn');
+const resetBtn = document.getElementById('resetBtn');
+const beginBtn = document.getElementById('beginBtn');
+const splash = document.getElementById('splash');
+const errEl = document.getElementById('err');
+const projectBar = document.getElementById('projectBar');
+const barName = document.getElementById('barName');
+const barSwatch = document.getElementById('barSwatch');
+const scrim = document.getElementById('scrim');
+const drawer = document.getElementById('drawer');
+const projList = document.getElementById('projList');
+const newName = document.getElementById('newName');
+const addBtn = document.getElementById('addBtn');
+const histBtn = document.getElementById('histBtn');
+const histScrim = document.getElementById('histScrim');
+const histSheet = document.getElementById('histSheet');
+const histBody = document.getElementById('histBody');
+const histTitle = document.getElementById('histTitle');
+const histSub = document.getElementById('histSub');
+const histSwatch = document.getElementById('histSwatch');
+
+/* ---------------- projects / storage ---------------- */
+const STORE_KEY = 'rowkeeper.v2';
+const PALETTE = ['#B0472E','#6E7B5A','#3E6B7A','#9A6A3A','#7A5A8A','#4E7A5A','#A85A6E','#5A6E8A'];
+let state = { projects: [], currentId: null };
+let sessionMs = 0;   // time accrued in THIS session (also folded into project total live)
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) state = JSON.parse(raw);
+  } catch (e) { /* storage unavailable or corrupt — start fresh */ }
+  if (!state.projects || state.projects.length === 0) {
+    const first = makeProject('My First Project');
+    state = { projects: [first], currentId: first.id };
+    save();
+  }
+  if (!state.projects.find(p => p.id === state.currentId)) {
+    state.currentId = state.projects[0].id;
+  }
+  // migrate: ensure every project has a daily log
+  state.projects.forEach(p => { if (!p.log) p.log = {}; });
+}
+function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+  catch (e) { /* private mode / quota — app still works for the session */ }
+}
+function makeProject(name) {
+  const used = new Set((state.projects || []).map(p => p.color));
+  const color = PALETTE.find(c => !used.has(c)) || PALETTE[(state.projects || []).length % PALETTE.length];
+  return { id: 'p' + Date.now() + Math.floor(Math.random()*1000), name, color, totalMs: 0, log: {} };
+}
+function current() { return state.projects.find(p => p.id === state.currentId) || state.projects[0]; }
+
+function fmt(ms, withCs) {
+  const totalCs = Math.floor(ms / 100);
+  const cs = totalCs % 10;
+  let s = Math.floor(totalCs / 10);
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60); s -= m * 60;
+  const pad = n => String(n).padStart(2, '0');
+  const base = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  return withCs ? { base, cs } : base;
+}
+function fmtTotal(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m total`;
+  if (m > 0) return `${m}m ${s % 60}s total`;
+  return `${s}s total`;
+}
+
+/* ---------------- timing ---------------- */
+let handLandmarker = null;
+let running = false;
+let manualPause = false;
+let activeStart = null;    // performance.now() when current active stretch began
+let handsMoving = false;
+
+let prevLandmarks = null;
+let motionEMA = 0;
+const MOTION_ON = 0.010, MOTION_OFF = 0.006;
+let lastVideoTime = -1;
+let idleSince = 0;
+const IDLE_GRACE = 1500;
+
+/* Local YYYY-MM-DD (not UTC) so a day boundary matches the user's clock. */
+function dateKey(d = new Date()) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+/* Fold any open active stretch into totals. Call before switching/saving. */
+function commitActive() {
+  if (activeStart !== null) {
+    const delta = performance.now() - activeStart;
+    sessionMs += delta;
+    const c = current();
+    c.totalMs += delta;
+    const k = dateKey();
+    c.log[k] = (c.log[k] || 0) + delta;
+    activeStart = null;
+    save();
+  }
+}
+
+/* ---------------- events ---------------- */
+beginBtn.addEventListener('click', init);
+startBtn.addEventListener('click', togglePause);
+resetBtn.addEventListener('click', resetSession);
+projectBar.addEventListener('click', openDrawer);
+scrim.addEventListener('click', closeDrawer);
+addBtn.addEventListener('click', addProject);
+histBtn.addEventListener('click', openHistory);
+histScrim.addEventListener('click', closeHistory);
+newName.addEventListener('keydown', e => { if (e.key === 'Enter') addProject(); });
+window.addEventListener('beforeunload', commitActive);
+document.addEventListener('visibilitychange', () => { if (document.hidden) commitActive(); });
+
+async function init() {
+  beginBtn.disabled = true;
+  beginBtn.textContent = "Warming up…";
+  errEl.textContent = "";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numHands: 2
+    });
+
+    sizeCanvas();
+    window.addEventListener('resize', sizeCanvas);
+    splash.style.display = 'none';
+    running = true;
+    startBtn.disabled = false;
+    subEl.textContent = "Move your hands to begin counting.";
+    requestAnimationFrame(loop);
+  } catch (e) {
+    beginBtn.disabled = false;
+    beginBtn.textContent = "Start the camera";
+    if (e && e.name === 'NotAllowedError')
+      errEl.textContent = "Camera access was blocked. Allow it in Settings, then tap again.";
+    else
+      errEl.textContent = "Couldn't start the camera. Make sure you're on HTTPS and no other app is using it.";
+  }
+}
+
+function sizeCanvas() { overlay.width = overlay.clientWidth; overlay.height = overlay.clientHeight; }
+
+function loop() {
+  if (!running) return;
+  if (video.currentTime !== lastVideoTime && video.readyState >= 2) {
+    lastVideoTime = video.currentTime;
+    const res = handLandmarker.detectForVideo(video, performance.now());
+    processResult(res);
+  }
+  updateTimer();
+  requestAnimationFrame(loop);
+}
+
+function processResult(res) {
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  const hands = res.landmarks || [];
+  if (hands.length === 0) {
+    prevLandmarks = null;
+    motionEMA *= 0.6;
+    setMotion(false, 0);
+    return;
+  }
+  drawHands(hands);
+  const flat = hands.flat();
+  if (prevLandmarks && prevLandmarks.length === flat.length) {
+    let sum = 0;
+    for (let i = 0; i < flat.length; i++) {
+      const dx = flat[i].x - prevLandmarks[i].x, dy = flat[i].y - prevLandmarks[i].y;
+      sum += Math.hypot(dx, dy);
+    }
+    motionEMA = motionEMA * 0.7 + (sum / flat.length) * 0.3;
+  }
+  prevLandmarks = flat.map(p => ({ x: p.x, y: p.y }));
+  const threshold = handsMoving ? MOTION_OFF : MOTION_ON;
+  setMotion(motionEMA > threshold, hands.length);
+}
+
+function setMotion(moving, handCount) {
+  const now = performance.now();
+  if (moving) idleSince = 0;
+  else if (idleSince === 0) idleSince = now;
+  const withinGrace = idleSince !== 0 && (now - idleSince) < IDLE_GRACE && !manualPause && handCount > 0;
+  handsMoving = (moving || withinGrace) && handCount > 0 && !manualPause;
+
+  if (manualPause) { statusText.textContent = "Paused"; statusEl.className = "paused"; }
+  else if (handCount === 0) { statusText.textContent = "Looking for hands…"; statusEl.className = ""; }
+  else if (handsMoving) { statusText.textContent = handCount === 2 ? "Both hands working" : "Stitching"; statusEl.className = "active"; }
+  else { statusText.textContent = "Hands resting"; statusEl.className = ""; }
+}
+
+let saveTick = 0;
+function updateTimer() {
+  const now = performance.now();
+  if (handsMoving && !manualPause) {
+    if (activeStart === null) activeStart = now;
+  } else {
+    commitActive();
+  }
+  const liveActive = activeStart !== null ? now - activeStart : 0;
+  render(sessionMs + liveActive);
+
+  // periodically bank progress (~every 5s) so a crash loses little.
+  // commit-and-reopen keeps totalMs, the daily log, and storage all in sync.
+  if (activeStart !== null && now - saveTick > 5000) {
+    saveTick = now;
+    commitActive();
+    activeStart = performance.now();
+  }
+}
+
+function render(ms) {
+  const { base, cs } = fmt(ms, true);
+  hmsEl.textContent = base;
+  csEl.textContent = '.' + cs;
+  if (!running) return;
+  if (manualPause) subEl.textContent = "Paused — tap Resume to keep going.";
+  else if (handsMoving) subEl.textContent = "Counting time for " + current().name + ".";
+  else subEl.textContent = "Waiting for movement…";
+}
+
+function togglePause() {
+  manualPause = !manualPause;
+  if (manualPause) commitActive();
+  startBtn.textContent = manualPause ? "Resume" : "Pause";
+}
+
+/* Reset clears only THIS session's clock, not the project's lifetime total. */
+function resetSession() {
+  commitActive();
+  sessionMs = 0;
+  manualPause = false;
+  startBtn.textContent = "Pause";
+  render(0);
+  subEl.textContent = running ? "Session cleared. Move your hands to start again." : "Ready when you are.";
+}
+
+/* ---------------- history ---------------- */
+// compact form for a single day, e.g. "1h 05m", "12m", "48s"
+function fmtDur(ms) {
+  const s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2,'0')}m`;
+  if (m > 0) return `${m}m`;
+  return `${sec}s`;
+}
+function prettyDay(key) {
+  const [y, mo, d] = key.split('-').map(Number);
+  const date = new Date(y, mo - 1, d);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((today - date) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+function monthLabel(key) {
+  const [y, mo] = key.split('-').map(Number);
+  return new Date(y, mo - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }).toUpperCase();
+}
+
+function openHistory() {
+  const wasActive = activeStart !== null;
+  commitActive();          // bank today's in-progress time so it shows in history
+  if (wasActive) activeStart = performance.now();  // resume the live stretch
+  renderHistory();
+  histScrim.classList.add('open');
+  histSheet.classList.add('open');
+}
+function closeHistory() { histScrim.classList.remove('open'); histSheet.classList.remove('open'); }
+
+function renderHistory() {
+  const c = current();
+  histSwatch.style.background = c.color;
+  histTitle.textContent = c.name;
+
+  const entries = Object.entries(c.log || {})
+    .filter(([, ms]) => ms >= 500)      // hide sub-half-second noise
+    .sort((a, b) => b[0].localeCompare(a[0]));   // newest first
+
+  if (entries.length === 0) {
+    histSub.textContent = 'Time per day';
+    histBody.innerHTML = `<div class="hempty">No stitching logged yet.<br>Your daily totals will show up here.</div>`;
+    return;
+  }
+
+  const grandTotal = entries.reduce((sum, [, ms]) => sum + ms, 0);
+  const maxDay = Math.max(...entries.map(([, ms]) => ms));
+  const days = entries.length;
+  histSub.textContent = `${days} day${days>1?'s':''} · ${fmtDur(grandTotal)} tracked`;
+
+  let html = `<div class="hsum"><span class="l">Lifetime</span><span class="v">${fmtDur(c.totalMs)}</span></div>`;
+  let lastMonth = '';
+  for (const [key, ms] of entries) {
+    const mo = key.slice(0, 7);
+    if (mo !== lastMonth) { html += `<div class="hgroup">${monthLabel(key)}</div>`; lastMonth = mo; }
+    const pct = Math.max(6, Math.round((ms / maxDay) * 100));
+    html += `<div class="hrow">
+      <div class="hday">
+        <div class="hd1">${prettyDay(key)}</div>
+        <div class="hbar" style="width:${pct}%;background:${c.color}"></div>
+      </div>
+      <div class="hval">${fmtDur(ms)}</div>
+    </div>`;
+  }
+  histBody.innerHTML = html;
+}
+
+/* ---------------- projects UI ---------------- */
+function refreshBar() {
+  const c = current();
+  barName.textContent = c.name;
+  barSwatch.style.background = c.color;
+}
+
+function renderList() {
+  projList.innerHTML = '';
+  state.projects.forEach(p => {
+    const liveExtra = (p.id === current().id && activeStart !== null) ? performance.now() - activeStart : 0;
+    const row = document.createElement('div');
+    row.className = 'prow' + (p.id === state.currentId ? ' sel' : '');
+    row.innerHTML =
+      `<span class="sw" style="background:${p.color}"></span>
+       <span class="meta">
+         <span class="nm"></span>
+         <span class="tm">${fmtTotal(p.totalMs + liveExtra)}</span>
+       </span>
+       <span class="tick">✓</span>
+       <button class="del" title="Delete">✕</button>`;
+    row.querySelector('.nm').textContent = p.name;
+    row.addEventListener('click', e => {
+      if (e.target.closest('.del')) return;
+      selectProject(p.id);
+    });
+    row.querySelector('.del').addEventListener('click', e => { e.stopPropagation(); deleteProject(p.id); });
+    projList.appendChild(row);
+  });
+}
+
+function openDrawer() { renderList(); scrim.classList.add('open'); drawer.classList.add('open'); }
+function closeDrawer() { scrim.classList.remove('open'); drawer.classList.remove('open'); newName.blur(); }
+
+function selectProject(id) {
+  if (id === state.currentId) { closeDrawer(); return; }
+  commitActive();            // bank time to the OLD project first
+  state.currentId = id;
+  sessionMs = 0;             // fresh session clock for the newly chosen project
+  activeStart = null;
+  manualPause = false;
+  startBtn.textContent = "Pause";
+  save();
+  refreshBar();
+  render(0);
+  subEl.textContent = "Now tracking " + current().name + ".";
+  closeDrawer();
+}
+
+function addProject() {
+  const name = newName.value.trim();
+  if (!name) { newName.focus(); return; }
+  const p = makeProject(name);
+  state.projects.push(p);
+  save();
+  newName.value = '';
+  renderList();
+  selectProject(p.id);
+  openDrawer();  // keep drawer open so they see it added/selected
+}
+
+function deleteProject(id) {
+  const p = state.projects.find(x => x.id === id);
+  if (!p) return;
+  if (!confirm(`Delete “${p.name}” and its ${fmtTotal(p.totalMs)}? This can't be undone.`)) return;
+  const wasCurrent = id === state.currentId;
+  if (wasCurrent) { activeStart = null; sessionMs = 0; }
+  state.projects = state.projects.filter(x => x.id !== id);
+  if (state.projects.length === 0) {
+    const fresh = makeProject('My First Project');
+    state.projects.push(fresh);
+    state.currentId = fresh.id;
+  } else if (wasCurrent) {
+    state.currentId = state.projects[0].id;
+  }
+  save();
+  refreshBar();
+  if (wasCurrent) { render(0); subEl.textContent = "Now tracking " + current().name + "."; }
+  renderList();
+}
+
+/* ---------------- overlay drawing ---------------- */
+function drawHands(hands) {
+  const w = overlay.width, h = overlay.height;
+  const C = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+             [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  const col = current().color;
+  octx.save();
+  for (const lm of hands) {
+    octx.strokeStyle = col; octx.globalAlpha = 0.85;
+    octx.lineWidth = 3; octx.lineCap = "round";
+    for (const [a,b] of C) {
+      octx.beginPath();
+      octx.moveTo((1-lm[a].x)*w, lm[a].y*h);
+      octx.lineTo((1-lm[b].x)*w, lm[b].y*h);
+      octx.stroke();
+    }
+    octx.globalAlpha = 0.95; octx.fillStyle = "rgba(245,240,230,0.95)";
+    for (const p of lm) { octx.beginPath(); octx.arc((1-p.x)*w, p.y*h, 3.5, 0, Math.PI*2); octx.fill(); }
+  }
+  octx.restore();
+}
+
+/* ---------------- boot ---------------- */
+load();
+refreshBar();
+render(0);
+</script>
+</body>
+</html>
